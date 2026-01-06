@@ -1,5 +1,9 @@
 ## Apple Maps Experience Intelligence (Reddit → NLP → Dashboard)
 
+## 🔗 Live Dashboard
+ https://apple-maps-experience-intelligence-d8rr4gmsgb23bzzdfpuds9.streamlit.app/
+
+
 ## What this project does
 This project turns **public Reddit discussions about Apple Maps** into structured, decision-ready insights.
 
