@@ -1,10 +1,13 @@
 # app.py — Apple Maps Experience Intel (Storyboard)
-# 5 pages: Problem & KPIs → Theme pain → Theme×Type → Critical drilldown → Methodology
+# 6 views: KPIs → theme priority → theme/type → drilldown → insights → methodology
 
 from __future__ import annotations
+from html import escape
 from pathlib import Path
 import pandas as pd
 import streamlit as st
+
+from src.metrics import enrich_metrics, theme_summary, weighted_rate
 
 try:
     import altair as alt
@@ -24,15 +27,16 @@ st.set_page_config(page_title="Apple Maps Experience Review", page_icon="🗺️
 st.markdown(
     """
 <style>
-.block-container { padding-top: 2rem; padding-bottom: 2rem; max-width: 1120px; }
+.block-container { padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1220px; }
 header {visibility: hidden;}
 h1,h2,h3 { letter-spacing: -0.02em; }
 .small-muted { color: rgba(250,250,250,0.65); font-size: 0.95rem; }
 .card {
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 14px;
-  padding: 16px 18px;
+  background: linear-gradient(145deg, rgba(39,110,241,0.09), rgba(255,255,255,0.025));
+  border: 1px solid rgba(120,170,255,0.16);
+  border-radius: 18px;
+  padding: 18px 20px;
+  min-height: 100%;
 }
 .quote {
   background: rgba(90,170,255,0.10);
@@ -42,6 +46,15 @@ h1,h2,h3 { letter-spacing: -0.02em; }
 }
 hr { border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 1.2rem 0; }
 [data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
+[data-testid="stMetric"] {
+  background: rgba(255,255,255,0.035);
+  border: 1px solid rgba(255,255,255,0.09);
+  padding: 14px 16px;
+  border-radius: 16px;
+}
+[data-testid="stMetricLabel"] { min-height: 2.4rem; }
+[data-baseweb="tab-list"] { gap: 0.4rem; }
+[data-baseweb="tab"] { border-radius: 999px; padding: 0.55rem 0.9rem; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -108,6 +121,7 @@ def load_data():
                     df_threads = df_threads.rename(columns={c: "thread_id"})
                     break
 
+    df_threads = enrich_metrics(df_threads)
     return df_threads, df_theme, df_top, df_ev
 
 
@@ -156,11 +170,10 @@ def shorten_url(u: str, n: int = 55) -> str:
 # -----------------------------
 # NORTH STAR METRIC (simple, interpretable)
 # -----------------------------
-# North Star: "Negative Experience Rate" = avg comment_neg_rate across threads
-# (If you want theme-specific later, we’ll compute per theme in Page 2.)
-NEG_XP = df_threads["comment_neg_rate"].mean() if "comment_neg_rate" in df_threads.columns else None
-POS_XP = df_threads["comment_pos_rate"].mean() if "comment_pos_rate" in df_threads.columns else None
-NEU_XP = df_threads["comment_neu_rate"].mean() if "comment_neu_rate" in df_threads.columns else None
+# Overall comment sentiment is weighted by the number of comments in each thread.
+NEG_XP = weighted_rate(df_threads, "comment_neg_rate")
+POS_XP = weighted_rate(df_threads, "comment_pos_rate")
+NEU_XP = weighted_rate(df_threads, "comment_neu_rate")
 
 
 # -----------------------------
@@ -169,14 +182,20 @@ NEU_XP = df_threads["comment_neu_rate"].mean() if "comment_neu_rate" in df_threa
 st.markdown("## Apple Maps Experience Intel")
 st.markdown("<div class='small-muted'>Public feedback → themes → sentiment → pain → decision-ready triage</div>", unsafe_allow_html=True)
 
-with st.expander("📦 Data paths (debug)", expanded=False):
-    st.write("Project root:", str(ROOT))
-    st.write("Outputs dir:", str(OUTPUTS))
-    st.write("Required:", str(THREAD_METRICS))
+with st.expander("Data quality & definitions", expanded=False):
+    threads_with_comments = int(df_threads["n_comments_scraped"].gt(0).sum())
+    st.write(
+        f"{len(df_threads):,} threads; {threads_with_comments:,} include scraped comments; "
+        f"{int(df_threads['n_comments_scraped'].sum()):,} comments analyzed."
+    )
+    st.caption(
+        "Comment sentiment is weighted by actual comment count. Pain uses directional negative "
+        "consensus, and priority adjusts pain for evidence confidence."
+    )
 
 
 # -----------------------------
-# TABS (5 pages)
+# TABS (6 views)
 # -----------------------------
 tabs = st.tabs([
     "1) Problem & KPIs",
@@ -224,7 +243,7 @@ then convert that noise into <b>actionable product priorities</b>.<br><br>
             """
 <div class="card">
 1) <b>Theme clarity</b> (routing, POI/search, UI, reliability, policy, …)<br>
-2) <b>Prioritization</b> using <b>Pain × Volume</b> + triage labels<br>
+2) <b>Prioritization</b> using confidence-adjusted theme burden + triage labels<br>
 3) <b>Evidence pack</b> with representative comments + thread links
 </div>
 """,
@@ -279,44 +298,35 @@ then convert that noise into <b>actionable product priorities</b>.<br><br>
     # -----------------------------
     st.markdown("### North Star & key KPIs")
 
-    # North Star: overall negative experience rate (avg negative comment rate across threads)
-    neg_rate = df_threads["comment_neg_rate"].mean() if "comment_neg_rate" in df_threads.columns else None
-    pos_rate = df_threads["comment_pos_rate"].mean() if "comment_pos_rate" in df_threads.columns else None
-    neu_rate = df_threads["comment_neu_rate"].mean() if "comment_neu_rate" in df_threads.columns else None
+    # Overall comment sentiment, weighted by the number of comments in each thread.
+    neg_rate, pos_rate, neu_rate = NEG_XP, POS_XP, NEU_XP
 
     critical_threads = (df_threads["pain_bucket"] == "critical").sum() if "pain_bucket" in df_threads.columns else None
     high_threads = (df_threads["pain_bucket"].isin(["high", "critical"])).sum() if "pain_bucket" in df_threads.columns else None
 
-    # Top theme headline (by avg_weighted_pain if present; else pain × volume)
+    action_now_threads = (df_threads["triage_label"] == "action_now").sum()
+
+    # Portfolio priority: additive confidence-adjusted pain; exclude catch-all "other".
     top_theme = None
     if "theme" in df_threads.columns:
-        if "weighted_pain" in df_threads.columns:
-            tmp = (df_threads.groupby("theme", as_index=False)
-                   .agg(avg_weighted_pain=("weighted_pain", "mean"), threads=("thread_id", "count"))
-                   .sort_values("avg_weighted_pain", ascending=False))
-            if len(tmp) > 0:
-                top_theme = str(tmp.iloc[0]["theme"])
-        elif "pain_intensity" in df_threads.columns:
-            tmp = (df_threads.groupby("theme", as_index=False)
-                   .agg(avg_pain=("pain_intensity", "mean"), threads=("thread_id", "count")))
-            tmp["pain_x_volume"] = tmp["avg_pain"] * tmp["threads"]
-            tmp = tmp.sort_values("pain_x_volume", ascending=False)
-            if len(tmp) > 0:
-                top_theme = str(tmp.iloc[0]["theme"])
+        tmp = theme_summary(df_threads)
+        tmp = tmp[tmp["theme"].ne("other")]
+        if not tmp.empty:
+            top_theme = str(tmp.iloc[0]["theme"]).replace("_", " ").title()
 
     k1, k2, k3, k4, k5 = st.columns(5)
 
-    k1.metric("North Star: Negative Experience Rate", fmt_pct(neg_rate) if neg_rate is not None else "—")
-    k2.metric("% Positive comments", fmt_pct(pos_rate) if pos_rate is not None else "—")
-    k3.metric("% Neutral comments", fmt_pct(neu_rate) if neu_rate is not None else "—")
-    k4.metric("High/Critical pain threads", fmt_num(high_threads) if high_threads is not None else "—")
-    k5.metric("Top pain theme (headline)", top_theme if top_theme else "—")
+    k1.metric("Negative comment share", fmt_pct(neg_rate))
+    k2.metric("Positive comment share", fmt_pct(pos_rate))
+    k3.metric("High / critical threads", fmt_num(high_threads), help="Severity only; evidence confidence is shown separately.")
+    k4.metric("Action now", fmt_num(action_now_threads), help="High/critical pain with medium or high comment confidence.")
+    k5.metric("Top named priority", top_theme if top_theme else "—")
 
     st.markdown(
         """
 <div class="small-muted">
-<b>Why these KPIs:</b> They answer “Are users unhappy overall?” (North Star), “Is it mixed or polarizing?” (sentiment mix),
-and “Where do we start?” (high/critical + top theme).
+Comment shares represent comments, not an average of threads. “Action now” requires both elevated pain and enough
+community evidence; low-confidence severe threads remain in “investigate.”
 </div>
 """,
         unsafe_allow_html=True,
@@ -347,7 +357,7 @@ and “Where do we start?” (high/critical + top theme).
         cols = [q1, q2, q3]
         for i, q in enumerate(quotes[:3]):
             with cols[i]:
-                st.markdown(f"<div class='quote'>“{clamp(q, 170)}”</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='quote'>“{escape(clamp(q, 170))}”</div>", unsafe_allow_html=True)
     else:
         st.info("No evidence text found yet. Re-run notebook export for evidence_comments.csv")
 
@@ -360,10 +370,11 @@ and “Where do we start?” (high/critical + top theme).
     st.markdown(
         """
 <div class="card">
-<b>Page 2:</b> Theme-level pain ranking (Pain × Volume + sentiment mix)<br>
+<b>Page 2:</b> Theme priority ranking (severity + evidence + frequency)<br>
 <b>Page 3:</b> Theme × Post Type (complaints vs bugs vs praise)<br>
 <b>Page 4:</b> Critical threads drill-down (full context + most negative comments)<br>
-<b>Page 5:</b> Methodology & metric definitions (trust layer)
+<b>Page 5:</b> Live insights & recommendations<br>
+<b>Page 6:</b> Methodology & metric definitions (trust layer)
 </div>
 """,
         unsafe_allow_html=True,
@@ -374,9 +385,9 @@ and “Where do we start?” (high/critical + top theme).
 # PAGE 2 — Theme-level pain
 # ============================================================
 with tabs[1]:
-    st.markdown("## Theme-level pain (where to focus)")
+    st.markdown("## Theme priorities")
     st.markdown(
-        "<div class='small-muted'>Rank themes by severity + reach. Pain × Volume highlights issues that are both frequent and painful.</div>",
+        "<div class='small-muted'>Separate severity, reach, and evidence strength before deciding what to act on.</div>",
         unsafe_allow_html=True,
     )
     st.divider()
@@ -391,51 +402,7 @@ with tabs[1]:
 
     df_t = df_threads.copy()
 
-    # Helper: weighted average of a rate by n_comments_scraped (if exists)
-    def wavg_rate(group, rate_col, weight_col="n_comments_scraped"):
-        if rate_col not in group.columns:
-            return float("nan")
-        if weight_col not in group.columns:
-            return group[rate_col].mean()
-        w = group[weight_col].fillna(0)
-        if w.sum() <= 0:
-            return group[rate_col].mean()
-        return (group[rate_col] * w).sum() / w.sum()
-
-    # Aggregate per theme
-    agg_dict = {
-        "threads": ("thread_id", "count") if "thread_id" in df_t.columns else ("theme", "count"),
-        "total_comments": ("n_comments_scraped", "sum") if "n_comments_scraped" in df_t.columns else ("theme", "count"),
-    }
-
-    if "pain_intensity" in df_t.columns:
-        agg_dict["avg_pain_intensity"] = ("pain_intensity", "mean")
-    if "weighted_pain" in df_t.columns:
-        agg_dict["avg_weighted_pain"] = ("weighted_pain", "mean")
-    if "post_sentiment" in df_t.columns:
-        agg_dict["avg_post_sentiment"] = ("post_sentiment", "mean")
-
-    theme_tbl = (
-        df_t.groupby("theme", as_index=False)
-            .agg(**agg_dict)
-    )
-
-    # Add sentiment mix by theme (prefer comment-weighted)
-    for col in ["comment_neg_rate", "comment_neu_rate", "comment_pos_rate"]:
-        if col in df_t.columns:
-            theme_tbl[col] = (
-                df_t.groupby("theme")
-                    .apply(lambda g, c=col: wavg_rate(g, c))
-                    .values
-            )
-
-    # Pain × Volume (primary prioritization lens)
-    if "avg_pain_intensity" in theme_tbl.columns:
-        theme_tbl["pain_x_volume"] = theme_tbl["threads"] * theme_tbl["avg_pain_intensity"]
-    elif "avg_weighted_pain" in theme_tbl.columns:
-        theme_tbl["pain_x_volume"] = theme_tbl["threads"] * theme_tbl["avg_weighted_pain"]
-    else:
-        theme_tbl["pain_x_volume"] = float("nan")
+    theme_tbl = theme_summary(df_t)
 
     # -----------------------------
     # Controls (clean + minimal)
@@ -446,9 +413,9 @@ with tabs[1]:
         sort_mode = st.selectbox(
             "Sort themes by",
             options=[
-                "Pain × Volume (recommended)",
+                "Priority score (recommended)",
                 "Avg pain intensity",
-                "Avg weighted pain",
+                "Avg confidence-adjusted pain",
                 "Volume (threads)",
             ],
             index=0
@@ -461,11 +428,11 @@ with tabs[1]:
         show_details = st.toggle("Show details table", value=True)
 
     # Sorting logic
-    if sort_mode.startswith("Pain"):
-        theme_tbl = theme_tbl.sort_values("pain_x_volume", ascending=False)
+    if sort_mode.startswith("Priority"):
+        theme_tbl = theme_tbl.sort_values("priority_score", ascending=False)
     elif sort_mode.startswith("Avg pain"):
         theme_tbl = theme_tbl.sort_values("avg_pain_intensity", ascending=False) if "avg_pain_intensity" in theme_tbl.columns else theme_tbl
-    elif sort_mode.startswith("Avg weighted"):
+    elif sort_mode.startswith("Avg confidence"):
         theme_tbl = theme_tbl.sort_values("avg_weighted_pain", ascending=False) if "avg_weighted_pain" in theme_tbl.columns else theme_tbl
     else:
         theme_tbl = theme_tbl.sort_values("threads", ascending=False)
@@ -477,34 +444,35 @@ with tabs[1]:
     # -----------------------------
     left, right = st.columns([1.1, 0.9])
 
-    # === Chart 1: Pain × Volume
+    # === Chart 1: confidence-adjusted priority burden
     with left:
-        st.markdown("<div class='card'><b>Priority ranking: Pain × Volume</b></div>", unsafe_allow_html=True)
+        st.markdown("<div class='card'><b>Priority ranking</b></div>", unsafe_allow_html=True)
 
-        if alt is not None and "pain_x_volume" in view.columns:
+        if alt is not None and "priority_score" in view.columns:
             bar = (
                 alt.Chart(view)
-                .mark_bar()
+                .mark_bar(cornerRadiusEnd=5, color="#4F8DF7")
                 .encode(
-                    x=alt.X("theme:N", sort="-y", title=None),
-                    y=alt.Y("pain_x_volume:Q", title="Pain × Volume"),
+                    y=alt.Y("theme:N", sort="-x", title=None),
+                    x=alt.X("priority_score:Q", title="Priority score"),
                     tooltip=[
                         "theme",
                         alt.Tooltip("threads:Q"),
                         alt.Tooltip("total_comments:Q"),
-                        alt.Tooltip("avg_pain_intensity:Q", format=".3f") if "avg_pain_intensity" in view.columns else alt.Tooltip("pain_x_volume:Q"),
-                        alt.Tooltip("avg_weighted_pain:Q", format=".3f") if "avg_weighted_pain" in view.columns else alt.Tooltip("pain_x_volume:Q"),
+                        alt.Tooltip("avg_pain_intensity:Q", format=".3f"),
+                        alt.Tooltip("priority_score:Q", format=".3f"),
+                        alt.Tooltip("action_now:Q"),
                     ],
                 )
                 .properties(height=320)
             )
-            st.altair_chart(bar, use_container_width=True)
+            st.altair_chart(bar, width="stretch")
         else:
-            st.info("Altair not available (or pain_x_volume missing). Showing compact table instead.")
-            st.dataframe(view[["theme", "threads", "total_comments", "pain_x_volume"]], use_container_width=True, height=320)
+            st.info("Chart unavailable. Showing the compact ranking instead.")
+            st.dataframe(view[["theme", "threads", "total_comments", "priority_score"]], width="stretch", height=320)
 
         st.markdown(
-            "<div class='small-muted'>Interpretation: prioritize themes that are both <b>painful</b> and <b>frequent</b>.</div>",
+            "<div class='small-muted'>Priority score = sum of confidence-adjusted pain across threads. It captures severity, evidence, and frequency without allowing a single thread to lead the portfolio.</div>",
             unsafe_allow_html=True,
         )
 
@@ -540,9 +508,9 @@ with tabs[1]:
                     )
                     .properties(height=320)
                 )
-                st.altair_chart(stacked, use_container_width=True)
+                st.altair_chart(stacked, width="stretch")
             else:
-                st.dataframe(mix, use_container_width=True, height=320)
+                st.dataframe(mix, width="stretch", height=320)
 
             st.markdown(
                 "<div class='small-muted'>Interpretation: Negative share shows where frustration dominates; Positive share shows where users feel value.</div>",
@@ -559,8 +527,8 @@ with tabs[1]:
     if show_details:
         st.markdown("### Theme KPI table (compact)")
 
-        cols = ["theme", "threads", "total_comments"]
-        for c in ["avg_pain_intensity", "avg_weighted_pain", "avg_post_sentiment"]:
+        cols = ["theme", "threads", "total_comments", "priority_score", "high_critical_rate", "action_now"]
+        for c in ["avg_pain_intensity", "avg_weighted_pain"]:
             if c in theme_tbl.columns:
                 cols.append(c)
 
@@ -571,7 +539,7 @@ with tabs[1]:
         show_tbl = theme_tbl[cols].copy()
 
         # friendly formatting
-        for c in ["avg_pain_intensity", "avg_weighted_pain", "avg_post_sentiment"]:
+        for c in ["avg_pain_intensity", "avg_weighted_pain", "priority_score", "high_critical_rate"]:
             if c in show_tbl.columns:
                 show_tbl[c] = show_tbl[c].map(lambda x: float(x) if pd.notna(x) else x)
 
@@ -580,14 +548,16 @@ with tabs[1]:
                 show_tbl[c] = show_tbl[c].map(lambda x: float(x) if pd.notna(x) else x)
 
         # show fewer rows + readable height
-        st.dataframe(show_tbl.head(top_n), use_container_width=True, height=360)
+        st.dataframe(show_tbl.head(top_n), width="stretch", height=360)
 
         with st.expander("How to read this table", expanded=False):
             st.markdown(
                 """
 - **threads**: number of unique user stories (threads) in this theme  
 - **total_comments**: engagement depth (how much community reaction exists)  
-- **avg_pain_intensity / avg_weighted_pain**: severity (higher = more painful)  
+- **priority_score**: total confidence-adjusted pain across a theme
+- **avg_pain_intensity**: mean severity; **avg_weighted_pain** discounts thin evidence
+- **action_now**: high/critical threads with medium/high evidence confidence
 - **comment_neg/neu/pos_rate**: share of comments by sentiment (weighted by comment count where possible)  
                 """
             )
@@ -617,7 +587,7 @@ with tabs[2]:
     with c1:
         metric_mode = st.selectbox(
             "Metric for heatmap",
-            ["Avg pain intensity", "Avg weighted pain", "Count of threads"],
+            ["Avg pain intensity", "Avg confidence-adjusted pain", "Count of threads"],
             index=0,
         )
 
@@ -635,7 +605,7 @@ with tabs[2]:
         metric_col = "pain_intensity"
         agg_func = "mean"
         value_label = "avg_pain_intensity"
-    elif metric_mode == "Avg weighted pain":
+    elif metric_mode == "Avg confidence-adjusted pain":
         if "weighted_pain" not in df_t.columns:
             st.warning("weighted_pain not found. Switching to Avg pain intensity.")
             metric_mode = "Avg pain intensity"
@@ -730,10 +700,10 @@ with tabs[2]:
             )
         )
 
-        st.altair_chart(heat + text, use_container_width=True)
+        st.altair_chart(heat + text, width="stretch")
     else:
         st.info("Altair not installed or empty heatmap. Showing compact table instead.")
-        st.dataframe(wide, use_container_width=True, height=420)
+        st.dataframe(wide, width="stretch", height=420)
 
     st.divider()
 
@@ -762,6 +732,15 @@ with tabs[2]:
         .sort_values("threads", ascending=False)
     )
 
+    # Rates must represent comments, not an unweighted average of threads.
+    for source_col, output_col in [("comment_neg_rate", "avg_neg"), ("comment_pos_rate", "avg_pos")]:
+        if source_col in sub.columns:
+            weighted = {
+                name: weighted_rate(group, source_col)
+                for name, group in sub.groupby("post_type")
+            }
+            dist[output_col] = dist["post_type"].map(weighted)
+
     # Make it compact + readable
     show_cols = ["post_type", "threads"]
     for c in ["total_comments", "avg_pain", "avg_weighted", "avg_neg", "avg_pos"]:
@@ -772,7 +751,7 @@ with tabs[2]:
 
     with left:
         st.markdown("<div class='card'><b>Post type distribution (this theme)</b></div>", unsafe_allow_html=True)
-        st.dataframe(dist[show_cols], use_container_width=True, height=280)
+        st.dataframe(dist[show_cols], width="stretch", height=280)
 
     with right:
         st.markdown("<div class='card'><b>Quick read</b></div>", unsafe_allow_html=True)
@@ -788,7 +767,7 @@ with tabs[2]:
         k_threads = len(sub)
         k_comments = sub["n_comments_scraped"].sum() if "n_comments_scraped" in sub.columns else float("nan")
         k_pain = sub["pain_intensity"].mean() if "pain_intensity" in sub.columns else float("nan")
-        k_neg = sub["comment_neg_rate"].mean() if "comment_neg_rate" in sub.columns else float("nan")
+        k_neg = weighted_rate(sub, "comment_neg_rate")
 
         st.markdown(
             f"""
@@ -796,7 +775,7 @@ with tabs[2]:
 - **Threads in theme:** {fmt_num(k_threads)}
 - **Total comments:** {fmt_num(k_comments)}
 - **Avg pain intensity:** {fmt_score(k_pain)}
-- **Avg negative comment rate:** {fmt_score(k_neg)}
+- **Negative comment share:** {fmt_pct(k_neg)}
 """
         )
 
@@ -807,7 +786,7 @@ with tabs[2]:
 
     if show_table:
         with st.expander("Full pivot table (compact)", expanded=False):
-            st.dataframe(wide, use_container_width=True, height=360)
+            st.dataframe(wide, width="stretch", height=360)
 
 
 
@@ -947,7 +926,7 @@ with tabs[3]:
     # Streamlit nice columns (link in drilldown)
     st.dataframe(
         df_ranked[show_cols],
-        use_container_width=True,
+        width="stretch",
         height=360,
         hide_index=True,
     )
@@ -978,7 +957,7 @@ with tabs[3]:
     k1.metric("Theme", str(r.get("theme", "—")))
     k2.metric("Post type", str(r.get("post_type", "—")))
     k3.metric("Pain intensity", fmt_score(r.get("pain_intensity", None)) if "pain_intensity" in row.columns else "—")
-    k4.metric("Neg comment rate", fmt_score(r.get("comment_neg_rate", None)) if "comment_neg_rate" in row.columns else "—")
+    k4.metric("Negative comment share", fmt_pct(r.get("comment_neg_rate", None)) if "comment_neg_rate" in row.columns else "—")
 
     # Extra row (decision labels)
     c1, c2, c3 = st.columns(3)
@@ -1000,7 +979,7 @@ with tabs[3]:
             break
 
     if post_text:
-        st.markdown(f"<div class='quote'>{post_text}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='quote'>{escape(post_text)}</div>", unsafe_allow_html=True)
     else:
         st.info("Post text not found in exports for this thread.")
 
@@ -1028,7 +1007,7 @@ with tabs[3]:
                 if cols:
                     if "sentiment_compound" in cols:
                         ev = ev.sort_values("sentiment_compound", ascending=True)
-                    st.dataframe(ev[cols].head(20), use_container_width=True, height=320, hide_index=True)
+                    st.dataframe(ev[cols].head(20), width="stretch", height=320, hide_index=True)
                 else:
                     st.info("evidence_comments.csv exists but does not include usable comment text fields.")
     else:
@@ -1039,7 +1018,7 @@ with tabs[3]:
 # ============================================================
 with tabs[4]:
     st.markdown("## Key Insights & Recommendations")
-    st.caption("What the data suggests Apple Maps teams should focus on")
+    st.caption("A live readout calculated from the current export")
 
     st.divider()
 
@@ -1048,24 +1027,32 @@ with tabs[4]:
     # -----------------------------
     st.markdown("### Executive insights")
 
+    live_summary = theme_summary(df_threads)
+    named_summary = live_summary[live_summary["theme"].ne("other")].copy()
+    top_priority = named_summary.iloc[0]
+    enough_comments = named_summary[named_summary["total_comments"].ge(10)]
+    most_negative = enough_comments.sort_values("comment_neg_rate", ascending=False).iloc[0]
+    other_share = df_threads["theme"].eq("other").mean()
+    low_conf_share = df_threads["comment_confidence"].eq("low").mean()
+
     st.markdown(
-        """
-**1. Navigation reliability is the primary trust driver**  
-Routing, rerouting, and traffic-related themes consistently generate  
-the **highest combination of pain and engagement**, indicating that  
-core navigation failures erode user trust faster than missing features.
+        f"""
+**1. {str(top_priority['theme']).replace('_', ' ').title()} is the leading named priority.**
 
-**2. POI & search issues create silent frustration**  
-Search and place accuracy issues show **moderate pain but low discussion volume**,  
-suggesting users may disengage quietly rather than complain loudly.
+It contributes **{top_priority['priority_score']:.2f} priority points** across
+**{int(top_priority['threads'])} threads**, after severity is adjusted for evidence confidence.
 
-**3. UI/UX issues polarize users, but rarely escalate**  
-Interface changes often trigger debate and mixed sentiment,  
-but fewer threads reach *critical* pain — indicating design tension, not failure.
+**2. {str(most_negative['theme']).replace('_', ' ').title()} has the highest negative comment share among themes with at least 10 comments.**
 
-**4. Policy & ecosystem discussions spike negativity without clear ownership**  
-Regulatory or ecosystem-driven issues generate frustration,  
-but often lack a clear product action path and should be triaged carefully.
+Its comment-weighted negative share is **{fmt_pct(most_negative['comment_neg_rate'])}**. This is a reaction signal, not a user-population estimate.
+
+**3. Classification coverage is the largest analysis gap.**
+
+The catch-all `other` bucket contains **{fmt_pct(other_share)} of threads**. Improve the taxonomy before treating theme comparisons as exhaustive.
+
+**4. Most thread-level signals need corroboration.**
+
+**{fmt_pct(low_conf_share)} of threads** have low comment confidence. Severe low-confidence items are routed to `investigate`, not directly to `action_now`.
 """
     )
 
@@ -1096,7 +1083,7 @@ but often lack a clear product action path and should be triaged carefully.
         columns=["Theme", "Recommendation"]
     )
 
-    st.dataframe(recs, use_container_width=True, height=260)
+    st.dataframe(recs, width="stretch", height=260)
 
     st.divider()
 
@@ -1108,13 +1095,12 @@ but often lack a clear product action path and should be triaged carefully.
     st.markdown(
         """
 **Act now**
-- Themes with **high pain × volume**
-- Threads marked **critical**
+- High/critical pain with medium or high evidence confidence
 - Reproducible failures with clear user impact
 
 **Investigate**
-- Moderate pain with growing engagement
-- Mixed sentiment but rising complaint frequency
+- Medium pain, or severe threads with thin evidence
+- Mixed sentiment with rising complaint frequency
 
 **Monitor**
 - Low pain or opinionated discussions
@@ -1248,18 +1234,21 @@ Each thread is reduced to a **single severity score**:
 **pain_intensity (0–1)** combines:
 - Post negativity (author frustration)
 - % of negative comments (community agreement)
-- Consensus strength (how polarized the discussion is)
+- Directional negative consensus (`max(negative − positive, 0)`)
 
 Intuition:
 - A very negative post with many agreeing comments → **high pain**
-- A mixed or debated thread → **lower confidence pain**
+- Unanimously positive comments do **not** add pain
+- A mixed or debated thread → lower negative consensus
 
 From this we derive:
 - **pain_bucket**: low / medium / high / critical
+- **confidence-adjusted pain**: severity × evidence weight (0.60 / 0.85 / 1.00)
+- **theme priority score**: sum of confidence-adjusted pain across threads
 - **triage_label**:
-  - `monitor`
-  - `investigate`
-  - `action_now`
+  - `action_now`: high/critical pain with medium/high comment confidence
+  - `investigate`: medium pain, or high/critical pain with thin evidence
+  - `monitor`: low pain
 """
     )
 

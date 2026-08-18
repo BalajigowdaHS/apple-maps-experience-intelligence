@@ -1,81 +1,54 @@
-## Apple Maps Experience Intelligence (Reddit → NLP → Dashboard)
+# Apple Maps Experience Intelligence
 
-## 🔗 Live Dashboard
- https://apple-maps-experience-intelligence-d8rr4gmsgb23bzzdfpuds9.streamlit.app/
+[Live Streamlit dashboard](https://apple-maps-experience-intelligence-d8rr4gmsgb23bzzdfpuds9.streamlit.app/)
 
+This project turns public Reddit conversations about Apple Maps into an auditable product-feedback dashboard. The pipeline collects posts and comments, cleans and classifies them, scores sentiment and pain, and exports thread-level evidence for product triage.
 
-## What this project does
-This project turns **public Reddit discussions about Apple Maps** into structured, decision-ready insights.
+## Current dataset
 
-Instead of manually reading posts, the notebook:
-1) Collects Apple Maps–related threads from Reddit (posts + comments)  
-2) Cleans and standardizes text  
-3) Runs sentiment + “pain intensity” scoring  
-4) Categorizes each thread into product themes (routing, POI/search, UI/CarPlay, etc.)  
-5) Exports clean CSVs and generates a **Streamlit dashboard** to explore results
+- 228 analyzed Reddit threads from `r/apple` and `r/applemaps`
+- 1,002 scraped comments
+- 148 threads with at least one scraped comment
+- 7 theme buckets and 6 post-type buckets
+- Coverage: May 14, 2025 through December 31, 2025
 
-The end result is a lightweight “experience intelligence” workflow: **What are users complaining about, how severe is it, and what themes show up most often?**
+The dataset is a directional public-discourse sample. It is not representative of the full Apple Maps user population.
 
----
+## Dashboard metrics
 
-## Data used (from the notebook)
-- **Raw dataset loaded:** `273` Reddit posts (RangeIndex: 273 entries)
-- **Threads analyzed in the final metrics table:** `228` threads (`[228 rows x 16 columns]`)
-- Subreddits used (configured in the notebook): `apple`, `applemaps`
-- Time window (configured in the notebook): last `8` months
+- **Comment sentiment share** is weighted by actual comment counts. Threads without comments do not dilute the rate.
+- **Pain intensity (0–1)** combines post negativity, negative-comment share, and directional negative consensus. Positive consensus cannot increase pain.
+- **Confidence-adjusted pain** discounts threads with limited comment evidence using weights of 0.60, 0.85, and 1.00 for low, medium, and high confidence.
+- **Theme priority score** is the sum of confidence-adjusted pain across a theme, combining frequency, severity, and evidence strength.
+- **Triage** sends well-supported high/critical signals to `action_now`, thin severe signals to `investigate`, and low-pain signals to `monitor`.
 
----
+Original notebook-exported pain fields are retained in memory as `legacy_pain_intensity` and `legacy_weighted_pain` for auditability. The dashboard uses the corrected definitions above.
 
-## Key outputs / metrics (verified from notebook)
-### Confidence signal (based on scraped comment volume)
-- **Low confidence:** `176` threads  
-- **Medium confidence:** `39` threads  
-- **High confidence:** `13` threads  
+## Project structure
 
-### Pain severity buckets (weighted pain score)
-- **Low:** `106`
-- **Medium:** `53`
-- **High:** `42`
-- **Critical:** `27`
+```text
+app.py                                  Streamlit dashboard
+src/metrics.py                          Tested metric definitions
+tests/test_metrics.py                   Metric regression tests
+notebooks/Data_Collection.ipynb         Reddit collection workflow
+notebooks/Data_Cleaning&Modling.ipynb   Cleaning, NLP, and export workflow
+notebooks/outputs/                       Dashboard-ready CSV exports
+data/raw/ and data/processed/            Source and normalized datasets
+```
 
-### Theme coverage (threads per theme)
-The analysis assigns each thread into one of these themes (threads count):
-- `navigation_routing_traffic`: **55**
-- `ui_ux_carplay`: **37**
-- `search_poi_data`: **13**
-- `policy_strategy`: **11**
-- `transit_walk_bike`: **7**
-- `performance_reliability`: **1**
-- `other`: **104**
-
-> Note: The notebook keeps an “other” bucket for threads that don’t strongly match a specific theme.
-
----
-
-## What’s inside the analysis table (what the dashboard uses)
-Each thread includes structured fields such as:
-- Post sentiment score + class (e.g., positive/neutral/negative)
-- Comment sentiment distribution (neg/neu/pos rates)
-- Scraped comment count
-- Weighted pain score + pain bucket
-- Theme label
-- Cleaned text fields for evidence and review
-
----
-
-## How to run
-### Option A — Run the notebook end-to-end
-Open and run:
-- `apple_maps_experience_intel_clean_v6_exports_dashboard_fixed.ipynb`
-
-This notebook also writes an export bundle:
-- `outputs/` (analysis-ready CSV exports)
-- `app.py` (Streamlit dashboard)
-- `requirements_dashboard.txt`
-
-### Option B — Run the Streamlit dashboard
-After running the notebook (so outputs exist):
+## Run locally
 
 ```bash
-pip install -r requirements_dashboard.txt
+pip install -r requirements.txt
 streamlit run app.py
+```
+
+The dashboard requirements are intentionally small for fast deployment. To rerun the NLP notebooks, install `requirements-notebook.txt` as well.
+
+Run the lightweight metric tests with:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+The app reads `notebooks/outputs/thread_metrics.csv` as its required source. Other output files provide optional evidence and precomputed exports.
